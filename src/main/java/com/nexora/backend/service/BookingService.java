@@ -3,6 +3,7 @@ package com.nexora.backend.service;
 
 import com.nexora.backend.entity.Booking;
 import com.nexora.backend.entity.BookingItem;
+import com.nexora.backend.entity.Event;
 import com.nexora.backend.entity.TicketType;
 import com.nexora.backend.entity.User;
 import com.nexora.backend.repository.BookingItemRepository;
@@ -13,6 +14,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -75,8 +77,7 @@ public class BookingService {
             );
         }
 
-        // Validate quantities and sort ticket IDs to reduce
-        // the risk of transactions locking tickets in different orders.
+        // Validate quantities and sort ticket IDs.
         Map<Long, Integer> tickets = new TreeMap<>();
 
         for (Map.Entry<Long, Integer> entry
@@ -103,7 +104,7 @@ public class BookingService {
         List<BookingItem> items = new ArrayList<>();
         BigDecimal totalAmount = BigDecimal.ZERO;
 
-        // Lock ticket rows and calculate prices from the database.
+        // Lock ticket rows and validate event availability.
         for (Map.Entry<Long, Integer> entry : tickets.entrySet()) {
 
             TicketType ticketType = ticketTypeRepository
@@ -111,6 +112,28 @@ public class BookingService {
                     .orElseThrow(() -> new IllegalArgumentException(
                             "Ticket type not found: " + entry.getKey()
                     ));
+
+            // Validate the event associated with this ticket.
+            Event event = ticketType.getEvent();
+
+            if (event == null) {
+                throw new IllegalStateException(
+                        "Ticket is not associated with an event"
+                );
+            }
+
+            if (!"PUBLISHED".equals(event.getStatus())) {
+                throw new IllegalArgumentException(
+                        "This event is not available for booking"
+                );
+            }
+
+            if (event.getEventDate() == null
+                    || !event.getEventDate().isAfter(LocalDate.now())) {
+                throw new IllegalArgumentException(
+                        "Booking for this event is closed"
+                );
+            }
 
             int quantity = entry.getValue();
             Integer available = ticketType.getAvailableQuantity();
@@ -147,6 +170,7 @@ public class BookingService {
             ticketTypeRepository.save(ticketType);
         }
 
+        // Create booking.
         Booking booking = new Booking();
         booking.setUser(user);
         booking.setBookingCode(generateBookingCode());
@@ -156,6 +180,7 @@ public class BookingService {
 
         Booking savedBooking = bookingRepository.save(booking);
 
+        // Save booking items.
         for (BookingItem item : items) {
             item.setBooking(savedBooking);
             bookingItemRepository.save(item);

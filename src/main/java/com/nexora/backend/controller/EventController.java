@@ -289,6 +289,50 @@ public class EventController {
         return ResponseEntity.noContent().build();
     }
 
+    
+    // =========================
+    // PUBLISH EVENT
+    // =========================
+
+    @PatchMapping("/{id}/publish")
+    @PreAuthorize("hasRole('ORGANIZER')")
+    public ResponseEntity<EventResponse> publishEvent(
+            @PathVariable Long id,
+            Authentication authentication
+    ) {
+
+        Event event = eventService
+                .getEventById(id)
+                .orElse(null);
+
+        if (event == null) {
+            return ResponseEntity.notFound().build();
+        }
+
+        User authenticatedUser =
+                getAuthenticatedUser(authentication);
+
+        // Organizer hanya boleh memublikasikan event miliknya.
+        if (!event.getOrganizer().getId()
+                .equals(authenticatedUser.getId())) {
+
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .build();
+        }
+
+        // Hanya event DRAFT yang dapat dipublikasikan.
+        if (!"DRAFT".equals(event.getStatus())) {
+            return ResponseEntity.badRequest().build();
+        }
+
+        event.setStatus("PUBLISHED");
+
+        Event publishedEvent = eventService.saveEvent(event);
+
+        return ResponseEntity.ok(toResponse(publishedEvent));
+    }
+
+
     // =========================
     // GET AUTHENTICATED USER
     // =========================

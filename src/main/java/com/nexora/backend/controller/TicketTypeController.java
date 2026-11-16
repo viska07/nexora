@@ -1,8 +1,10 @@
 
 package com.nexora.backend.controller;
 
+import com.nexora.backend.dto.TicketTypeResponse;
 import com.nexora.backend.entity.TicketType;
 import com.nexora.backend.service.TicketTypeService;
+
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -21,20 +23,40 @@ public class TicketTypeController {
         this.ticketTypeService = ticketTypeService;
     }
 
-    @GetMapping
-    public ResponseEntity<List<TicketType>> getAllTicketTypes() {
-        return ResponseEntity.ok(
-                ticketTypeService.getAllTicketTypes()
+    private TicketTypeResponse toResponse(TicketType ticket) {
+        return new TicketTypeResponse(
+                ticket.getId(),
+                ticket.getEvent().getId(),
+                ticket.getName(),
+                ticket.getPrice(),
+                ticket.getQuota(),
+                ticket.getAvailableQuantity()
         );
     }
 
+    @GetMapping
+    public ResponseEntity<List<TicketTypeResponse>> getAllTicketTypes() {
+
+        List<TicketTypeResponse> response =
+                ticketTypeService.getAllTicketTypes()
+                        .stream()
+                        .map(this::toResponse)
+                        .toList();
+
+        return ResponseEntity.ok(response);
+    }
+
     @GetMapping("/event/{eventId}")
-    public ResponseEntity<List<TicketType>> getTicketTypesByEvent(
+    public ResponseEntity<List<TicketTypeResponse>> getTicketTypesByEvent(
             @PathVariable Long eventId) {
 
-        return ResponseEntity.ok(
+        List<TicketTypeResponse> response =
                 ticketTypeService.getTicketTypesByEvent(eventId)
-        );
+                        .stream()
+                        .map(this::toResponse)
+                        .toList();
+
+        return ResponseEntity.ok(response);
     }
 
     @PostMapping
@@ -76,7 +98,7 @@ public class TicketTypeController {
                 ticketTypeService.saveTicketType(ticketType);
 
         return ResponseEntity.status(HttpStatus.CREATED)
-                .body(savedTicket);
+                .body(toResponse(savedTicket));
     }
 
     @PutMapping("/{id}")
@@ -87,15 +109,16 @@ public class TicketTypeController {
 
         return ticketTypeService.getTicketTypeById(id)
                 .map(existing -> {
+
                     if (request.getName() == null
                             || request.getName().isBlank()
                             || request.getPrice() == null
                             || request.getPrice().signum() < 0
                             || request.getQuota() == null
                             || request.getQuota() <= 0) {
+
                         return ResponseEntity.badRequest().body(
-                                Map.of("message",
-                                        "Data tiket tidak valid.")
+                                Map.of("message", "Data tiket tidak valid.")
                         );
                     }
 
@@ -107,8 +130,10 @@ public class TicketTypeController {
 
                     if (request.getQuota() < sold) {
                         return ResponseEntity.badRequest().body(
-                                Map.of("message",
-                                        "Kuota tidak boleh lebih kecil dari tiket yang sudah terjual.")
+                                Map.of(
+                                        "message",
+                                        "Kuota tidak boleh lebih kecil dari tiket yang sudah terjual."
+                                )
                         );
                     }
 
@@ -117,9 +142,10 @@ public class TicketTypeController {
                             request.getQuota() - sold
                     );
 
-                    return ResponseEntity.ok(
-                            ticketTypeService.saveTicketType(existing)
-                    );
+                    TicketType updated =
+                            ticketTypeService.saveTicketType(existing);
+
+                    return ResponseEntity.ok(toResponse(updated));
                 })
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
@@ -134,6 +160,7 @@ public class TicketTypeController {
         }
 
         ticketTypeService.deleteTicketType(id);
+
         return ResponseEntity.noContent().build();
     }
 }
