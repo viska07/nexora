@@ -1,4 +1,3 @@
-
 package com.nexora.backend.service;
 
 import com.nexora.backend.entity.Booking;
@@ -53,7 +52,11 @@ public class BookingService {
     }
 
     public List<Booking> getBookingsByUser(Long userId) {
-        return bookingRepository.findByUserId(userId);
+        return bookingRepository.findByUserIdOrderByBookedAtDesc(userId);
+    }
+
+    public List<BookingItem> getBookingItems(Long bookingId) {
+        return bookingItemRepository.findByBookingId(bookingId);
     }
 
     public Booking saveBooking(Booking booking) {
@@ -77,11 +80,14 @@ public class BookingService {
             );
         }
 
-        // Validate quantities and sort ticket IDs.
+        /*
+         * TreeMap membuat urutan ticket ID konsisten.
+         * Ini juga membantu mengurangi kemungkinan deadlock
+         * ketika beberapa user melakukan booking bersamaan.
+         */
         Map<Long, Integer> tickets = new TreeMap<>();
 
-        for (Map.Entry<Long, Integer> entry
-                : requestedTickets.entrySet()) {
+        for (Map.Entry<Long, Integer> entry : requestedTickets.entrySet()) {
 
             Long ticketTypeId = entry.getKey();
             Integer quantity = entry.getValue();
@@ -104,7 +110,9 @@ public class BookingService {
         List<BookingItem> items = new ArrayList<>();
         BigDecimal totalAmount = BigDecimal.ZERO;
 
-        // Lock ticket rows and validate event availability.
+        /*
+         * Lock setiap ticket type sebelum membaca dan mengurangi stock.
+         */
         for (Map.Entry<Long, Integer> entry : tickets.entrySet()) {
 
             TicketType ticketType = ticketTypeRepository
@@ -113,7 +121,6 @@ public class BookingService {
                             "Ticket type not found: " + entry.getKey()
                     ));
 
-            // Validate the event associated with this ticket.
             Event event = ticketType.getEvent();
 
             if (event == null) {
@@ -136,6 +143,7 @@ public class BookingService {
             }
 
             int quantity = entry.getValue();
+
             Integer available = ticketType.getAvailableQuantity();
 
             if (available == null || available < quantity) {
@@ -158,20 +166,28 @@ public class BookingService {
             );
 
             BookingItem item = new BookingItem();
+
             item.setTicketType(ticketType);
             item.setQuantity(quantity);
             item.setUnitPrice(unitPrice);
             item.setSubtotal(subtotal);
 
             items.add(item);
+
             totalAmount = totalAmount.add(subtotal);
 
-            ticketType.setAvailableQuantity(available - quantity);
+            ticketType.setAvailableQuantity(
+                    available - quantity
+            );
+
             ticketTypeRepository.save(ticketType);
         }
 
-        // Create booking.
+        /*
+         * Create booking header.
+         */
         Booking booking = new Booking();
+
         booking.setUser(user);
         booking.setBookingCode(generateBookingCode());
         booking.setTotalAmount(totalAmount);
@@ -180,9 +196,13 @@ public class BookingService {
 
         Booking savedBooking = bookingRepository.save(booking);
 
-        // Save booking items.
+        /*
+         * Save booking items.
+         */
         for (BookingItem item : items) {
+
             item.setBooking(savedBooking);
+
             bookingItemRepository.save(item);
         }
 
@@ -190,7 +210,8 @@ public class BookingService {
     }
 
     private String generateBookingCode() {
-        return "NEX-" + UUID.randomUUID()
+        return "NEX-"
+                + UUID.randomUUID()
                 .toString()
                 .replace("-", "")
                 .substring(0, 20)

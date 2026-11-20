@@ -1,15 +1,25 @@
-
 package com.nexora.backend.controller;
 
+import com.nexora.backend.dto.TicketTypeRequest;
 import com.nexora.backend.dto.TicketTypeResponse;
+import com.nexora.backend.entity.Event;
 import com.nexora.backend.entity.TicketType;
+import com.nexora.backend.entity.User;
+import com.nexora.backend.service.EventService;
 import com.nexora.backend.service.TicketTypeService;
+import com.nexora.backend.service.UserService;
+
+import jakarta.validation.Valid;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.Authentication;
+
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
@@ -18,21 +28,22 @@ import java.util.Map;
 public class TicketTypeController {
 
     private final TicketTypeService ticketTypeService;
+    private final EventService eventService;
+    private final UserService userService;
 
-    public TicketTypeController(TicketTypeService ticketTypeService) {
+    public TicketTypeController(
+            TicketTypeService ticketTypeService,
+            EventService eventService,
+            UserService userService
+    ) {
         this.ticketTypeService = ticketTypeService;
+        this.eventService = eventService;
+        this.userService = userService;
     }
 
-    private TicketTypeResponse toResponse(TicketType ticket) {
-        return new TicketTypeResponse(
-                ticket.getId(),
-                ticket.getEvent().getId(),
-                ticket.getName(),
-                ticket.getPrice(),
-                ticket.getQuota(),
-                ticket.getAvailableQuantity()
-        );
-    }
+    // =========================
+    // GET ALL TICKET TYPES
+    // =========================
 
     @GetMapping
     public ResponseEntity<List<TicketTypeResponse>> getAllTicketTypes() {
@@ -46,9 +57,14 @@ public class TicketTypeController {
         return ResponseEntity.ok(response);
     }
 
+    // =========================
+    // GET TICKET TYPES BY EVENT
+    // =========================
+
     @GetMapping("/event/{eventId}")
     public ResponseEntity<List<TicketTypeResponse>> getTicketTypesByEvent(
-            @PathVariable Long eventId) {
+            @PathVariable Long eventId
+    ) {
 
         List<TicketTypeResponse> response =
                 ticketTypeService.getTicketTypesByEvent(eventId)
@@ -59,108 +75,279 @@ public class TicketTypeController {
         return ResponseEntity.ok(response);
     }
 
+    // =========================
+    // CREATE TICKET TYPE
+    // =========================
+
     @PostMapping
     @PreAuthorize("hasAnyRole('ORGANIZER', 'ADMIN')")
     public ResponseEntity<?> createTicketType(
-            @RequestBody TicketType ticketType) {
+            @Valid @RequestBody TicketTypeRequest request,
+            Authentication authentication
+    ) {
 
-        if (ticketType.getEvent() == null
-                || ticketType.getEvent().getId() == null) {
-            return ResponseEntity.badRequest().body(
-                    Map.of("message", "Event ID wajib diisi.")
-            );
+        Event event = eventService
+                .getEventById(request.getEventId())
+                .orElse(null);
+
+        if (event == null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of(
+                            "message",
+                            "Event not found"
+                    ));
         }
 
-        if (ticketType.getName() == null
-                || ticketType.getName().isBlank()) {
-            return ResponseEntity.badRequest().body(
-                    Map.of("message", "Nama tiket wajib diisi.")
-            );
+        User authenticatedUser = getAuthenticatedUser(authentication);
+
+        String role = getRole(authentication);
+
+        /*
+         * ADMIN dapat membuat ticket type
+         * untuk event apa pun.
+         *
+         * ORGANIZER hanya dapat membuat
+         * ticket type untuk event miliknya sendiri.
+         */
+        if (role.equals("ROLE_ORGANIZER")
+                && !event.getOrganizer().getId()
+                .equals(authenticatedUser.getId())) {
+
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of(
+                            "message",
+                            "You can only manage ticket types for your own events"
+                    ));
         }
 
-        if (ticketType.getPrice() == null
-                || ticketType.getPrice().signum() < 0) {
-            return ResponseEntity.badRequest().body(
-                    Map.of("message", "Harga tiket tidak boleh negatif.")
-            );
-        }
+        LocalDateTime now = LocalDateTime.now();
 
-        if (ticketType.getQuota() == null
-                || ticketType.getQuota() <= 0) {
-            return ResponseEntity.badRequest().body(
-                    Map.of("message", "Kuota tiket harus lebih dari nol.")
-            );
-        }
+        TicketType ticketType = new TicketType();
 
-        ticketType.setAvailableQuantity(ticketType.getQuota());
+        ticketType.setEvent(event);
+        ticketType.setName(request.getName());
+        ticketType.setDescription(request.getDescription());
+        ticketType.setPrice(request.getPrice());
+        ticketType.setQuota(request.getQuota());
+
+        /*
+         * Saat ticket type pertama kali dibuat,
+         * seluruh quota masih tersedia.
+         */
+        ticketType.setAvailableQuantity(request.getQuota());
+
+        ticketType.setCreatedAt(now);
+        ticketType.setUpdatedAt(now);
 
         TicketType savedTicket =
                 ticketTypeService.saveTicketType(ticketType);
 
-        return ResponseEntity.status(HttpStatus.CREATED)
+        return ResponseEntity
+                .status(HttpStatus.CREATED)
                 .body(toResponse(savedTicket));
     }
+
+    // =========================
+    // UPDATE TICKET TYPE
+    // =========================
 
     @PutMapping("/{id}")
     @PreAuthorize("hasAnyRole('ORGANIZER', 'ADMIN')")
     public ResponseEntity<?> updateTicketType(
             @PathVariable Long id,
-            @RequestBody TicketType request) {
+            @Valid @RequestBody TicketTypeRequest request,
+            Authentication authentication
+    ) {
 
-        return ticketTypeService.getTicketTypeById(id)
-                .map(existing -> {
+        TicketType existingTicket =
+                ticketTypeService
+                        .getTicketTypeById(id)
+                        .orElse(null);
 
-                    if (request.getName() == null
-                            || request.getName().isBlank()
-                            || request.getPrice() == null
-                            || request.getPrice().signum() < 0
-                            || request.getQuota() == null
-                            || request.getQuota() <= 0) {
+        if (existingTicket == null) {
+            return ResponseEntity.notFound().build();
+        }
 
-                        return ResponseEntity.badRequest().body(
-                                Map.of("message", "Data tiket tidak valid.")
-                        );
-                    }
+        Event event = existingTicket.getEvent();
 
-                    existing.setName(request.getName());
-                    existing.setPrice(request.getPrice());
+        User authenticatedUser = getAuthenticatedUser(authentication);
 
-                    int sold = existing.getQuota()
-                            - existing.getAvailableQuantity();
+        String role = getRole(authentication);
 
-                    if (request.getQuota() < sold) {
-                        return ResponseEntity.badRequest().body(
-                                Map.of(
-                                        "message",
-                                        "Kuota tidak boleh lebih kecil dari tiket yang sudah terjual."
-                                )
-                        );
-                    }
+        /*
+         * ADMIN dapat mengubah ticket type apa pun.
+         *
+         * ORGANIZER hanya dapat mengubah
+         * ticket type dari event miliknya sendiri.
+         */
+        if (role.equals("ROLE_ORGANIZER")
+                && !event.getOrganizer().getId()
+                .equals(authenticatedUser.getId())) {
 
-                    existing.setQuota(request.getQuota());
-                    existing.setAvailableQuantity(
-                            request.getQuota() - sold
-                    );
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of(
+                            "message",
+                            "You can only manage ticket types for your own events"
+                    ));
+        }
 
-                    TicketType updated =
-                            ticketTypeService.saveTicketType(existing);
+        /*
+         * Event ticket type tidak boleh dipindahkan
+         * ke event lain melalui update.
+         *
+         * eventId dari request harus sama dengan
+         * event yang sudah dimiliki ticket type.
+         */
+        if (!event.getId().equals(request.getEventId())) {
 
-                    return ResponseEntity.ok(toResponse(updated));
-                })
-                .orElseGet(() -> ResponseEntity.notFound().build());
+            return ResponseEntity.badRequest()
+                    .body(Map.of(
+                            "message",
+                            "Ticket type cannot be moved to another event"
+                    ));
+        }
+
+        /*
+         * Hitung jumlah tiket yang sudah terjual.
+         */
+        int sold = existingTicket.getQuota()
+                - existingTicket.getAvailableQuantity();
+
+        /*
+         * Quota baru tidak boleh lebih kecil
+         * dari jumlah tiket yang sudah terjual.
+         */
+        if (request.getQuota() < sold) {
+
+            return ResponseEntity.badRequest()
+                    .body(Map.of(
+                            "message",
+                            "Quota cannot be smaller than tickets already sold"
+                    ));
+        }
+
+        existingTicket.setName(request.getName());
+        existingTicket.setDescription(request.getDescription());
+        existingTicket.setPrice(request.getPrice());
+        existingTicket.setQuota(request.getQuota());
+
+        /*
+         * Stok tersedia dihitung ulang berdasarkan
+         * quota baru dikurangi tiket yang sudah terjual.
+         */
+        existingTicket.setAvailableQuantity(
+                request.getQuota() - sold
+        );
+
+        existingTicket.setUpdatedAt(LocalDateTime.now());
+
+        TicketType updatedTicket =
+                ticketTypeService.saveTicketType(existingTicket);
+
+        return ResponseEntity.ok(toResponse(updatedTicket));
     }
 
-    @DeleteMapping("/{id}")
-    @PreAuthorize("hasRole('ADMIN')")
-    public ResponseEntity<Void> deleteTicketType(
-            @PathVariable Long id) {
+    // =========================
+    // DELETE TICKET TYPE
+    // =========================
 
-        if (ticketTypeService.getTicketTypeById(id).isEmpty()) {
+    @DeleteMapping("/{id}")
+    @PreAuthorize("hasAnyRole('ORGANIZER', 'ADMIN')")
+    public ResponseEntity<?> deleteTicketType(
+            @PathVariable Long id,
+            Authentication authentication
+    ) {
+
+        TicketType ticketType =
+                ticketTypeService
+                        .getTicketTypeById(id)
+                        .orElse(null);
+
+        if (ticketType == null) {
             return ResponseEntity.notFound().build();
+        }
+
+        Event event = ticketType.getEvent();
+
+        User authenticatedUser = getAuthenticatedUser(authentication);
+
+        String role = getRole(authentication);
+
+        /*
+         * ADMIN dapat menghapus ticket type apa pun.
+         *
+         * ORGANIZER hanya dapat menghapus
+         * ticket type dari event miliknya sendiri.
+         */
+        if (role.equals("ROLE_ORGANIZER")
+                && !event.getOrganizer().getId()
+                .equals(authenticatedUser.getId())) {
+
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of(
+                            "message",
+                            "You can only manage ticket types for your own events"
+                    ));
         }
 
         ticketTypeService.deleteTicketType(id);
 
         return ResponseEntity.noContent().build();
+    }
+
+    // =========================
+    // GET AUTHENTICATED USER
+    // =========================
+
+    private User getAuthenticatedUser(
+            Authentication authentication
+    ) {
+
+        return userService
+                .getUserByEmail(authentication.getName())
+                .orElseThrow(() ->
+                        new RuntimeException(
+                                "Authenticated user not found"
+                        )
+                );
+    }
+
+    // =========================
+    // GET ROLE
+    // =========================
+
+    private String getRole(
+            Authentication authentication
+    ) {
+
+        return authentication
+                .getAuthorities()
+                .stream()
+                .map(authority ->
+                        authority.getAuthority()
+                )
+                .findFirst()
+                .orElse("");
+    }
+
+    // =========================
+    // ENTITY → RESPONSE DTO
+    // =========================
+
+    private TicketTypeResponse toResponse(
+            TicketType ticket
+    ) {
+
+        return new TicketTypeResponse(
+                ticket.getId(),
+                ticket.getEvent().getId(),
+                ticket.getName(),
+                ticket.getDescription(),
+                ticket.getPrice(),
+                ticket.getQuota(),
+                ticket.getAvailableQuantity(),
+                ticket.getCreatedAt(),
+                ticket.getUpdatedAt()
+        );
     }
 }
