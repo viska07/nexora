@@ -1,5 +1,6 @@
 package com.nexora.backend.service;
 
+import com.nexora.backend.dto.EventStatisticsResponse;
 import com.nexora.backend.entity.Booking;
 import com.nexora.backend.entity.BookingItem;
 import com.nexora.backend.entity.Event;
@@ -16,9 +17,11 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.UUID;
 
@@ -55,12 +58,83 @@ public class BookingService {
         return bookingRepository.findByUserIdOrderByBookedAtDesc(userId);
     }
 
+    public List<Booking> getBookingsByEvent(Long eventId) {
+        return bookingRepository.findBookingsByEventId(eventId);
+    }
+
     public List<BookingItem> getBookingItems(Long bookingId) {
         return bookingItemRepository.findByBookingId(bookingId);
     }
 
     public Booking saveBooking(Booking booking) {
         return bookingRepository.save(booking);
+    }
+
+    /**
+     * Calculate statistics for one event.
+     *
+     * totalBookings:
+     * Number of bookings containing tickets from this event.
+     *
+     * totalParticipants:
+     * Number of unique attendees who booked tickets
+     * for this event.
+     *
+     * totalTicketsSold:
+     * Total quantity of tickets booked.
+     *
+     * totalRevenue:
+     * Total subtotal of all booking items for this event.
+     */
+    public EventStatisticsResponse getEventStatistics(
+            Event event
+    ) {
+        List<BookingItem> items =
+                bookingItemRepository.findByEventId(event.getId());
+
+        Set<Long> participantIds = new HashSet<>();
+        Set<Long> bookingIds = new HashSet<>();
+
+        int totalTicketsSold = 0;
+        BigDecimal totalRevenue = BigDecimal.ZERO;
+
+        for (BookingItem item : items) {
+
+            Booking booking = item.getBooking();
+
+            if (booking == null) {
+                continue;
+            }
+
+            if (booking.getId() != null) {
+                bookingIds.add(booking.getId());
+            }
+
+            User user = booking.getUser();
+
+            if (user != null && user.getId() != null) {
+                participantIds.add(user.getId());
+            }
+
+            if (item.getQuantity() != null) {
+                totalTicketsSold += item.getQuantity();
+            }
+
+            if (item.getSubtotal() != null) {
+                totalRevenue = totalRevenue.add(
+                        item.getSubtotal()
+                );
+            }
+        }
+
+        return new EventStatisticsResponse(
+                event.getId(),
+                event.getTitle(),
+                bookingIds.size(),
+                participantIds.size(),
+                totalTicketsSold,
+                totalRevenue
+        );
     }
 
     @Transactional
@@ -87,7 +161,8 @@ public class BookingService {
          */
         Map<Long, Integer> tickets = new TreeMap<>();
 
-        for (Map.Entry<Long, Integer> entry : requestedTickets.entrySet()) {
+        for (Map.Entry<Long, Integer> entry
+                : requestedTickets.entrySet()) {
 
             Long ticketTypeId = entry.getKey();
             Integer quantity = entry.getValue();

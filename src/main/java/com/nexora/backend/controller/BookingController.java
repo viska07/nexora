@@ -2,10 +2,13 @@ package com.nexora.backend.controller;
 
 import com.nexora.backend.dto.BookingItemResponse;
 import com.nexora.backend.dto.BookingResponse;
+import com.nexora.backend.dto.EventStatisticsResponse;
 import com.nexora.backend.entity.Booking;
 import com.nexora.backend.entity.BookingItem;
+import com.nexora.backend.entity.Event;
 import com.nexora.backend.entity.User;
 import com.nexora.backend.service.BookingService;
+import com.nexora.backend.service.EventService;
 import com.nexora.backend.service.UserService;
 
 import org.springframework.http.HttpStatus;
@@ -23,13 +26,16 @@ public class BookingController {
 
     private final BookingService bookingService;
     private final UserService userService;
+    private final EventService eventService;
 
     public BookingController(
             BookingService bookingService,
-            UserService userService
+            UserService userService,
+            EventService eventService
     ) {
         this.bookingService = bookingService;
         this.userService = userService;
+        this.eventService = eventService;
     }
 
     /**
@@ -78,6 +84,93 @@ public class BookingController {
                 .stream()
                 .map(this::toResponse)
                 .toList();
+
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Get participants/bookings for an event.
+     *
+     * Organizer can only access participants
+     * from their own event.
+     *
+     * Admin can access participants from any event.
+     */
+    @GetMapping("/event/{eventId}")
+    @PreAuthorize("hasAnyRole('ORGANIZER', 'ADMIN')")
+    public ResponseEntity<?> getEventParticipants(
+            @PathVariable Long eventId,
+            Authentication authentication
+    ) {
+        Event event = eventService
+                .getEventById(eventId)
+                .orElse(null);
+
+        if (event == null) {
+            return ResponseEntity.notFound().build();
+        }
+
+        User authenticatedUser = getAuthenticatedUser(authentication);
+        String role = getRole(authentication);
+
+        if (role.equals("ROLE_ORGANIZER")
+                && !event.getOrganizer().getId()
+                .equals(authenticatedUser.getId())) {
+
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of(
+                            "message",
+                            "You can only access participants from your own events"
+                    ));
+        }
+
+        List<BookingResponse> response = bookingService
+                .getBookingsByEvent(eventId)
+                .stream()
+                .map(this::toResponse)
+                .toList();
+
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Get event statistics.
+     *
+     * Organizer can only access statistics
+     * from their own event.
+     *
+     * Admin can access statistics from any event.
+     */
+    @GetMapping("/event/{eventId}/statistics")
+    @PreAuthorize("hasAnyRole('ORGANIZER', 'ADMIN')")
+    public ResponseEntity<?> getEventStatistics(
+            @PathVariable Long eventId,
+            Authentication authentication
+    ) {
+        Event event = eventService
+                .getEventById(eventId)
+                .orElse(null);
+
+        if (event == null) {
+            return ResponseEntity.notFound().build();
+        }
+
+        User authenticatedUser = getAuthenticatedUser(authentication);
+        String role = getRole(authentication);
+
+        if (role.equals("ROLE_ORGANIZER")
+                && !event.getOrganizer().getId()
+                .equals(authenticatedUser.getId())) {
+
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of(
+                            "message",
+                            "You can only access statistics from your own events"
+                    ));
+        }
+
+        EventStatisticsResponse response =
+                bookingService.getEventStatistics(event);
 
         return ResponseEntity.ok(response);
     }
